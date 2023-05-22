@@ -185,6 +185,42 @@ get_rhost(pam_handle_t *pamh, const Params *params) {
   return (const char *)rhost;
 }
 
+static const char *
+get_ruser(pam_handle_t *pamh, const Params *params)
+{
+  // Get the remote user
+  PAM_CONST void *ruser;
+  if (pam_get_item(pamh, PAM_RUSER, &ruser) != PAM_SUCCESS)
+  {
+    log_message(LOG_ERR, pamh, "pam_get_ruser() failed to get the remote user");
+    return NULL;
+  }
+  if (params->debug)
+  {
+    log_message(LOG_INFO, pamh, "debug: google_authenticator for user \"%s\"",
+                ruser);
+  }
+  return (const char *)ruser;
+}
+
+static const char *
+get_tty(pam_handle_t *pamh, const Params *param)
+{
+  // Get the tty
+  PAM_CONST void *tty;
+  if (pam_get_item(pamh, PAM_TTY, &tty) != PAM_SUCCESS)
+  {
+    log_message(LOG_ERR, pamh, "pam_get_tty() failed to get the tty");
+    return NULL;
+  }
+  if (param->debug)
+  {
+    log_message(LOG_INFO, pamh, "debug: google_authenticator for tty \"%s\"",
+                tty);
+  }
+  return (const char *)tty;
+}
+
 static size_t
 getpwnam_buf_max_size()
 {
@@ -671,7 +707,7 @@ static int write_file_contents(pam_handle_t *pamh,
       goto cleanup;
     }
   }
-  
+
   if (rename(tmp_filename, secret_filename) != 0) {
     err = errno;
     log_message(LOG_ERR, pamh, "rename(): %s", strerror(err));
@@ -1562,13 +1598,16 @@ static int check_timebased_code(pam_handle_t *pamh, const char*secret_filename,
 int
 update_logindetails(pam_handle_t *pamh, const Params *params, char **buf) {
   const char *rhost = get_rhost(pamh, params);
+  const char *ruser = get_ruser(pamh, params);
+  const char *tty = get_tty(pamh, params);
   const time_t now = get_time();
   time_t oldest = now;    // Oldest entry seen so far.
   int oldest_index = -1;  // Index of oldest entry, due for replacement.
   int found = 0;          // Entry for this rhost found.
   char name[] = "LAST ";  // Config name template.
 
-  if (rhost == NULL) {
+  if (rhost == NULL && ruser == NULL && tty == NULL)
+  {
     return -1;
   }
 
@@ -1649,15 +1688,28 @@ int
 within_grace_period(pam_handle_t *pamh, const Params *params,
                     const char *buf) {
   const char *rhost = get_rhost(pamh, params);
+  const char *ruser = get_ruser(pamh, params);
+  const char *tty = get_tty(pamh, params);
   const time_t now = get_time();
   const time_t grace = params->grace_period;
   unsigned long when = 0;
   char match[128];
 
-  if (rhost == NULL) {
+  if (rhost == NULL && ruser == NULL && tty == NULL)
+  {
     return 0;
   }
-  snprintf(match, sizeof match, " %s %%lu ", rhost);
+
+  const char *val;
+  if (rhost) {
+    val = rhost;
+  } else if (ruser) {
+    val = ruser;
+  } else {
+    val = tty;
+  }
+
+  snprintf(match, sizeof match, " %s %%lu ", val);
 
   for (int i = 0; i < 10; i++) {
     static char name[] = "LAST0";
